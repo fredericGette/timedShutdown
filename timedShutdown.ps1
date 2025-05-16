@@ -79,15 +79,15 @@ if ( $NoShutdown ) {
     $PreviousLogoffTime = $null;
     foreach ($LogonTime in $LogonTimes) {
         $LogoffTime = $LogoffTimes | ? { $_ -gt $LogonTime } | select -First 1
-        if (-not $LogoffTime) {
+
+        # Missing LogoffTime:
+        if (-not $LogoffTime) { # We didn't found any logoffTime after the logonTime
             if ($PreviousLogonTime) {
                 $LogoffTime = $PreviousLogonTime
             } else {
                 $LogoffTime = Get-Date
             }
-        }
-
-        if ($LogoffTime -eq $PreviousLogoffTime) {
+        } elseif (($PreviousLogonTime) -and ($LogoffTime -gt $PreviousLogonTime)) { # We found a logoffTime but is value is too late
             $LogoffTime = $PreviousLogonTime
         }
 
