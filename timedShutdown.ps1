@@ -1,110 +1,128 @@
-# Set-ExecutionPolicy RemoteSigned
-#(Get-Date).DayOfWeek
-#(Get-Date).Hour
-#(Get-Date).Minute
-# Write-Output 'test'
-# New-Item -ItemType File -Path 'C:\Users\Public\NoShutdown' -Force -ErrorAction Stop
-# (cmd) copy NUL C:\Users\Public\NoShutdown
-# (cmd) del C:\Users\Public\NoShutdown
+# Define constants and file paths
+$NoShutdownFilePath = "C:\Users\Public\NoShutdown"
+$LogFilePath = "C:\Users\frede\Documents\timedShutdown.log"
+$MaxLogIntervalSeconds = 330 # 5 minutes + 30 seconds
+$MinLogIntervalSeconds = 270 # 5 minutes - 30 seconds
+$MaxAllowedTime = New-TimeSpan -Hours 6
 
-$Logfile = "C:\Users\frede\Documents\timedShutdown.log"
-function WriteLog
-{
-Param ([string]$LogString)
-$Stamp = (Get-Date).toString("yyyy/MM/dd HH:mm:ss")
-$LogMessage = "$Stamp $LogString"
-Add-content $LogFile -value $LogMessage
+# Get current time for checks and logging
+$CurrentTime = Get-Date
+$TodayString = $CurrentTime.ToString("yyyy-MM-dd")
+
+# --- Function to check if a file was created today ---
+function Test-FileCreatedToday {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Path
+    )
+    if (Test-Path $Path) {
+        $CreationDate = (Get-Item $Path).CreationTime.Date
+        $Today = (Get-Date).Date
+        return $CreationDate -eq $Today
+    }
+    return $false
 }
 
-$CurrentDateTime = Get-Date
-
-$NoShutdownPath = 'C:\Users\Public\NoShutdown'
-$NoShutdown = Get-Item -Path $NoShutdownPath -ErrorAction Ignore 
-if ( $NoShutdown ) {
-    # no time limit
-
-	if ( $NoShutdown.LastWriteTime.Date -ne $CurrentDateTime.Date )	{
-        # remove old "NoShutdown" file
-		Remove-Item -Path $NoShutdownPath -Force
-	}
-
-} else {
-
-    $DayTimeMinute = $CurrentDateTime.Hour * 60 + $CurrentDateTime.Minute
-
-    $DayTimeMin = 11 * 60 + 30
-    $DayTimeMax = 12 * 60 + 30
-
-    WriteLog "DayTimeMin: $DayTimeMin  DayTimeMax: $DayTimeMax  DayTimeMinute: $DayTimeMinute"
-	if ( ($DayTimeMinute -ge $DayTimeMin) -and ($DayTimeMinute -le $DayTimeMax)) {
-        WriteLog "Shutdown 11:30-12:30"
-        shutdown /s /d u:0:0 /c "Pas de télé jusqu'à 12h30 (ou sinon demande à Papa)."
-	}
-
-    $DayTimeMin = 18 * 60 + 30
-    $DayTimeMax = 19 * 60 + 30
-
-    WriteLog "DayTimeMin: $DayTimeMin  DayTimeMax: $DayTimeMax  DayTimeMinute: $DayTimeMinute"
-	if ( ($DayTimeMinute -ge $DayTimeMin) -and ($DayTimeMinute -le $DayTimeMax)) {
-        WriteLog "Shutdown 18:30-19:30"
-        shutdown /s /d u:0:0 /c "Pas de télé jusqu'à 19h30 (ou sinon demande à Papa)."
-	}    
-
-    # control max screen time
-
-    $LogonHt = @{
-        'LogName'      = 'System'
-        'ProviderName' = 'Microsoft-Windows-Winlogon'
-        'ID'           = 7001
-        'StartTime'    = [datetime]::Today
-    }
-    $LogonEvents = Get-WinEvent -ComputerName $env:COMPUTERNAME -FilterHashtable $LogonHt
-    $LogonTimes = $LogonEvents.TimeCreated
-
-    $LogoffHt = @{
-        'LogName'      = 'System'
-        'ProviderName' = 'Microsoft-Windows-Winlogon'
-        'ID'           = 7002
-        'StartTime'    = [datetime]::Today
-    }
-    $LogoffEvents = Get-WinEvent -ComputerName $env:COMPUTERNAME -FilterHashtable $LogoffHt -Oldest -ErrorAction Ignore
-    if (-not $LogoffEvents) {
-        $LogoffTimes = Get-Date
+# --- 1. Check for "NoShutdown" file ---
+if (Test-Path $NoShutdownFilePath) {
+    if (Test-FileCreatedToday -Path $NoShutdownFilePath) {
+        # 1.1 - File is present and created today: Do nothing and exit.
+        Write-Host "NoShutdown file is present and created today. Exiting."
+        exit
     } else {
-        $LogoffTimes = $LogoffEvents.TimeCreated
+        # 1.2 - File was created a previous day: Delete the file.
+        Write-Host "NoShutdown file is present but was created on a previous day. Deleting."
+        Remove-Item $NoShutdownFilePath -Force
     }
-
-    $DailyScreenTime = 0;
-    $PreviousLogonTime = $null;
-    $PreviousLogoffTime = $null;
-    foreach ($LogonTime in $LogonTimes) {
-        $LogoffTime = $LogoffTimes | ? { $_ -gt $LogonTime } | select -First 1
-
-        # Missing LogoffTime:
-        if (-not $LogoffTime) { # We didn't found any logoffTime after the logonTime
-            if ($PreviousLogonTime) {
-                $LogoffTime = $PreviousLogonTime
-            } else {
-                $LogoffTime = Get-Date
-            }
-        } elseif (($PreviousLogonTime) -and ($LogoffTime -gt $PreviousLogonTime)) { # We found a logoffTime but is value is too late
-            $LogoffTime = $PreviousLogonTime
-        }
-
-        $LogonDuration = [math]::Round((New-TimeSpan -Start $LogonTime -End $LogoffTime).TotalHours, 2)
-
-        $DailyScreenTime = $DailyScreenTime + $LogonDuration
-        WriteLog "LogonTime: $LogonTime  LogoffTime: $LogoffTime"
-        $PreviousLogonTime = $LogonTime;
-        $PreviousLogoffTime = $LogoffTime;
-    }
-
-    WriteLog "DailyScreenTime: $DailyScreenTime"
-
-    if ( $DailyScreenTime -ge 6 ) {
-        WriteLog "Shutdown 6h"
-        shutdown /s /d u:0:0 /c "Maximum 6h de télé aujourd'hui (ou sinon demande à Papa)."
-	}
 }
 
+# Ensure the log file directory exists
+$LogDir = Split-Path -Parent $LogFilePath
+if (-not (Test-Path $LogDir)) {
+    New-Item -Path $LogDir -ItemType Directory | Out-Null
+}
 
+# --- Remove logs written before today ---
+Write-Host "Cleaning up old log entries..."
+$AllLogs = @()
+if (Test-Path $LogFilePath) {
+    # Read all log entries and filter for today's date
+    # Only keep lines that start with today's date string (yyyy-MM-dd)
+    $TodayLogs = Get-Content $LogFilePath | Where-Object { 
+        $_ -match "^\d{4}-\d{2}-\d{2}" -and $_ -like "$TodayString*" 
+    }
+    
+    # Overwrite the log file with only today's entries
+    $TodayLogs | Out-File $LogFilePath -Encoding UTF8 -Force
+}
+
+# --- 4. Logging and Time Calculation (Modified to use $TodayLogs from cleanup) ---
+
+$TotalTimeLogged = New-TimeSpan -Seconds 0
+
+if ($TodayLogs.Count -gt 0) {
+    # Convert log strings to DateTime objects
+    $LogTimes = $TodayLogs | ForEach-Object { [datetime]($_ -split ' - ')[0] } | Sort-Object
+
+    # Add the current time to the list for the final interval calculation
+    $LogTimes += $CurrentTime
+
+    # Calculate total valid duration
+    for ($i = 0; $i -lt $LogTimes.Count - 1; $i++) {
+        $Time1 = $LogTimes[$i]
+        $Time2 = $LogTimes[$i+1]
+        $Duration = $Time2 - $Time1
+
+        # Check if the duration is within the 5 minutes +/- 30 seconds range
+        if ($Duration.TotalSeconds -ge $MinLogIntervalSeconds -and $Duration.TotalSeconds -le $MaxLogIntervalSeconds) {
+            $TotalTimeLogged += $Duration
+        }
+    }
+} else {
+    # If no logs today, the first log will be the current time, total time is 0 for now.
+    $TotalTimeLogged = New-TimeSpan -Seconds 0
+}
+
+# Format the total time for the log entry
+$TotalTimeFormatted = "{0:hh\:mm\:ss}" -f $TotalTimeLogged
+
+# Create the new log entry
+$NewLogEntry = "$($CurrentTime.ToString("yyyy-MM-dd HH:mm:ss")) - Total valid run time today: $TotalTimeFormatted"
+
+# Write the new log entry
+Add-Content -Path $LogFilePath -Value $NewLogEntry
+
+Write-Host "Current Total Valid Time: $TotalTimeFormatted"
+
+# --- Total Time Limit Check ---
+if ($TotalTimeLogged -ge $MaxAllowedTime) {
+    $Message = "Maximum 6h de tÃ©lÃ© aujourd'hui (ou sinon demande Ã  Papa)."
+    Write-Host "Total time check: 6-hour limit reached. Triggering shutdown."
+    shutdown /s /t 30 /c "$Message"
+    exit
+}
+
+# --- 2. Check for 11:30 to 12:30 shutdown window ---
+$TimeSpan1 = New-TimeSpan -Hours 11 -Minutes 30
+$TimeSpan2 = New-TimeSpan -Hours 12 -Minutes 30
+$CurrentTimeOfDay = $CurrentTime.TimeOfDay
+
+if ($CurrentTimeOfDay -ge $TimeSpan1 -and $CurrentTimeOfDay -lt $TimeSpan2) {
+    $Message = "Pas de tÃ©lÃ© jusqu'Ã  12h30 (ou sinon demande Ã  Papa)."
+    Write-Host "Time check 1: Triggering shutdown."
+    shutdown /s /t 30 /c "$Message"
+    exit
+}
+
+# --- 3. Check for 18:30 to 19:30 shutdown window ---
+$TimeSpan3 = New-TimeSpan -Hours 18 -Minutes 30
+$TimeSpan4 = New-TimeSpan -Hours 19 -Minutes 30
+
+if ($CurrentTimeOfDay -ge $TimeSpan3 -and $CurrentTimeOfDay -lt $TimeSpan4) {
+    $Message = "Pas de tÃ©lÃ© jusqu'Ã  19h30 (ou sinon demande Ã  Papa)."
+    Write-Host "Time check 2: Triggering shutdown."
+    shutdown /s /t 30 /c "$Message"
+    exit
+}
+
+Write-Host "Script finished successfully. No shutdown triggered."
